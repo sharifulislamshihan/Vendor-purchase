@@ -27,7 +27,7 @@ const todayStr = () => {
   return d.toISOString().split('T')[0]
 }
 
-export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumber, onSaveDraft, onSaveAndSend, onCancel, submitting, submitResult }) {
+export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumber, onSaveDraft, onSaveAndSend, onCancel, submitting, submitResult, onDismissResult }) {
   const [form, setForm] = useState({
     purchaseOrderNumber: initialPONumber || '',
     reference: '',
@@ -80,12 +80,32 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
     return { subTotal, totalTax, totalQuantity, discountAmount, adjustment, total }
   }, [lineItems, form.discount, form.discountType, form.adjustment])
 
+  const [validationErrors, setValidationErrors] = useState([])
+
   const handleSubmit = (action) => {
+    const errors = []
+    if (!vendor?.Books_Contact_ID) {
+      errors.push('This vendor is not linked to Zoho Books. Please link the vendor first.')
+    }
+    if (!form.date) {
+      errors.push('Date is required.')
+    }
+    const validItems = lineItems.filter((row) => row.item_id)
+    if (validItems.length === 0) {
+      errors.push('Add at least one item to the purchase order.')
+    }
+
+    if (errors.length > 0) {
+      setValidationErrors(errors)
+      return
+    }
+    setValidationErrors([])
+
     const payload = {
       ...form,
       purchaseOrderNumber: displayPONumber,
       vendor_id: vendor?.Books_Contact_ID,
-      line_items: lineItems.filter((row) => row.item_id),
+      line_items: validItems,
       ...calculations,
     }
     console.log('[PurchaseOrderForm] Submit:', action, payload)
@@ -206,43 +226,6 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
             />
           </div>
 
-          {/* Attachment */}
-          <div>
-            <Label className="text-sm text-muted-foreground mb-1.5 block">Attach File(s) to Purchase Order</Label>
-            <label className="flex items-center gap-2 border border-dashed rounded-lg px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <span className="text-sm text-muted-foreground">Upload File</span>
-              <input
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files || [])
-                  console.log('[PurchaseOrderForm] Files selected:', files.map(f => f.name))
-                  setForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), ...files] }))
-                }}
-              />
-            </label>
-            {form.attachments?.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {form.attachments.map((file, i) => (
-                  <div key={i} className="flex items-center justify-between text-xs bg-muted/30 rounded px-2 py-1">
-                    <span className="text-foreground truncate">{file.name}</span>
-                    <button
-                      className="text-muted-foreground hover:text-destructive ml-2"
-                      onClick={() => setForm((prev) => ({
-                        ...prev,
-                        attachments: prev.attachments.filter((_, idx) => idx !== i),
-                      }))}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground mt-1">Max 10 files, 10MB each</p>
-          </div>
         </div>
 
         {/* Totals Card */}
@@ -258,7 +241,7 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
           {/* Discount */}
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Discount</span>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <Input
                 type="number"
                 min="0"
@@ -266,15 +249,30 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
                 value={form.discount}
                 onChange={(e) => updateField('discount', e.target.value)}
               />
-              <Select value={form.discountType} onValueChange={(v) => updateField('discountType', v)}>
-                <SelectTrigger className="h-8 w-[55px] text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="percent">%</SelectItem>
-                  <SelectItem value="flat">Flat</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex h-8 rounded-md border overflow-hidden">
+                <button
+                  type="button"
+                  className={`px-2.5 text-xs font-medium transition-colors ${
+                    form.discountType === 'percent'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-background text-muted-foreground hover:bg-muted/50'
+                  }`}
+                  onClick={() => updateField('discountType', 'percent')}
+                >
+                  %
+                </button>
+                <button
+                  type="button"
+                  className={`px-2.5 text-xs font-medium border-l transition-colors ${
+                    form.discountType === 'flat'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-background text-muted-foreground hover:bg-muted/50'
+                  }`}
+                  onClick={() => updateField('discountType', 'flat')}
+                >
+                  Flat
+                </button>
+              </div>
               <span className="w-[65px] text-right text-muted-foreground">-{calculations.discountAmount.toFixed(2)}</span>
             </div>
           </div>
@@ -309,14 +307,29 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
 
       <Separator className="mb-4" />
 
+      {/* Validation Errors */}
+      {validationErrors.length > 0 && (
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm bg-amber-50 text-amber-700 border border-amber-200">
+          <ul className="list-disc list-inside space-y-0.5">
+            {validationErrors.map((err, i) => <li key={i}>{err}</li>)}
+          </ul>
+        </div>
+      )}
+
       {/* Submit Result */}
       {submitResult && (
-        <div className={`mb-4 px-4 py-3 rounded-lg text-sm ${
+        <div className={`mb-4 px-4 py-3 rounded-lg text-sm flex items-center justify-between ${
           submitResult.type === 'success'
             ? 'bg-green-50 text-green-700 border border-green-200'
             : 'bg-red-50 text-red-700 border border-red-200'
         }`}>
-          {submitResult.message}
+          <span>{submitResult.message}</span>
+          <button
+            className="ml-3 text-current opacity-50 hover:opacity-100 transition-opacity"
+            onClick={() => onDismissResult?.()}
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -328,14 +341,14 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
           disabled={submitting}
           onClick={() => handleSubmit('draft')}
         >
-          {submitting ? 'Saving...' : 'Save as Draft'}
+          {submitting === 'draft' ? 'Saving...' : 'Save as Draft'}
         </Button>
         <Button
           className="text-sm px-5 bg-primary hover:bg-primary/90 shadow-sm"
           disabled={submitting}
           onClick={() => handleSubmit('send')}
         >
-          {submitting ? 'Saving...' : 'Save and Send'}
+          {submitting === 'send' ? 'Saving...' : 'Save and Send'}
         </Button>
         <Button
           variant="ghost"

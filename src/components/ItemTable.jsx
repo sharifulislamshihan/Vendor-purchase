@@ -93,8 +93,9 @@ function ItemRow({ row, index, items, taxes, onUpdate, onRemove }) {
           </PopoverContent>
         </Popover>
         {row.name && (
-          <Input
-            className="mt-1.5 h-7 text-xs text-muted-foreground border-dashed"
+          <textarea
+            className="mt-1.5 w-full text-xs text-muted-foreground italic bg-muted/20 border-0 border-l-2 border-primary/20 rounded-none px-2 py-1 resize-none focus:outline-none focus:border-primary/40 placeholder:not-italic"
+            rows={1}
             placeholder="Add a description"
             value={row.description || ''}
             onChange={(e) => handleFieldChange('description', e.target.value)}
@@ -129,7 +130,13 @@ function ItemRow({ row, index, items, taxes, onUpdate, onRemove }) {
       <td className="p-2.5 w-[150px]">
         <Select value={row.tax_id || ''} onValueChange={handleTaxChange}>
           <SelectTrigger className="h-9 text-sm">
-            <SelectValue placeholder="Select Tax" />
+            {row.tax_id
+              ? (() => {
+                  const t = taxes.find((t) => t.tax_id === row.tax_id)
+                  return t ? `${t.tax_name} (${t.tax_percentage}%)` : <SelectValue placeholder="Select Tax" />
+                })()
+              : <SelectValue placeholder="Select Tax" />
+            }
           </SelectTrigger>
           <SelectContent>
             {taxes.map((tax) => (
@@ -151,7 +158,7 @@ function ItemRow({ row, index, items, taxes, onUpdate, onRemove }) {
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors"
+          className="h-7 w-7 p-0 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
           onClick={() => onRemove(index)}
         >
           ✕

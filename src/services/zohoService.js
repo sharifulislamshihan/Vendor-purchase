@@ -191,7 +191,7 @@ export const createBooksPurchaseOrder = async (formData, status = 'draft') => {
 }
 
 // Create Purchase Order in CRM and link to Vendor
-export const createCRMPurchaseOrder = async (booksPO, crmVendorId, formData) => {
+export const createCRMPurchaseOrder = async (booksPO, crmVendorId, formData, status) => {
   const ZOHO = getZOHO()
   if (!ZOHO) {
     console.warn('[zohoService] ZOHO SDK not available')
@@ -201,12 +201,12 @@ export const createCRMPurchaseOrder = async (booksPO, crmVendorId, formData) => 
   console.log('[zohoService] Creating PO in CRM for vendor:', crmVendorId)
 
   const crmRecord = {
-    Subject: `PO - ${booksPO.purchaseorder_number}`,
-    PO_Number: booksPO.purchaseorder_number,
+    Subject: booksPO.purchaseorder_number,
+    PO_Number: booksPO.purchaseorder_number.replace(/^\D+/, ''),
     PO_Date: formData.date,
     Due_Date: formData.deliveryDate || null,
     Vendor_Name: { id: crmVendorId },
-    Status: 'Created',
+    Status: status === 'draft' ? 'Draft' : 'Issued',
     Zoho_Books_PO_ID: booksPO.purchaseorder_id,
   }
 
