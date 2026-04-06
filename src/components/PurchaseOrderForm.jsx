@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
+import { Paperclip, X, FileText, Upload, Trash2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -13,40 +14,99 @@ import {
 } from '@/components/ui/select'
 import ItemTable from './ItemTable'
 
-const PAYMENT_TERMS = [
-  'Due on Receipt',
-  'Net 15',
-  'Net 30',
-  'Net 45',
-  'Net 60',
-  'Due end of the month',
-]
-
 const todayStr = () => {
   const d = new Date()
   return d.toISOString().split('T')[0]
 }
 
-export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumber, onSaveDraft, onSaveAndSend, onCancel, submitting, submitResult, onDismissResult }) {
-  const [form, setForm] = useState({
-    purchaseOrderNumber: initialPONumber || '',
-    reference: '',
-    date: todayStr(),
-    deliveryDate: '',
-    paymentTerms: 'Due on Receipt',
-    notes: '',
-    terms: '',
-    discount: 0,
-    discountType: 'percent',
-    adjustment: 0,
+export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms = [], defaultPaymentTerm = '', discountAccounts = [], initialPONumber, editData, existingAttachments = [], onDeleteAttachment, onSaveDraft, onSaveAndSend, onUpdate, onCancel, submitting, submitResult, onDismissResult }) {
+  const isEditMode = !!editData
+  const [deletingAttachment, setDeletingAttachment] = useState(null)
+
+  const [form, setForm] = useState(() => {
+    if (editData) {
+      return {
+        purchaseOrderNumber: editData.purchaseorder_number || '',
+        reference: editData.reference_number || '',
+        date: editData.date || todayStr(),
+        deliveryDate: editData.delivery_date || '',
+        paymentTerms: editData.payment_terms_label || defaultPaymentTerm,
+        notes: editData.notes || '',
+        terms: editData.terms || '',
+        discount: parseFloat(editData.discount) || 0,
+        discountType: editData.discount_type === 'entity_level' ? (String(editData.discount).endsWith('%') ? 'percent' : 'flat') : 'percent',
+        discountAccountId: editData.discount_account_id || '',
+        adjustment: parseFloat(editData.adjustment) || 0,
+        status: editData.status || 'draft',
+      }
+    }
+    return {
+      purchaseOrderNumber: initialPONumber || '',
+      reference: '',
+      date: todayStr(),
+      deliveryDate: '',
+      paymentTerms: defaultPaymentTerm,
+      notes: '',
+      terms: '',
+      discount: 0,
+      discountType: 'percent',
+      discountAccountId: '',
+      adjustment: 0,
+      status: 'draft',
+    }
   })
 
-  const [lineItems, setLineItems] = useState([
-    { item_id: '', name: '', description: '', quantity: 1, rate: 0, tax_id: '', tax_percentage: 0 },
-  ])
+  const [lineItems, setLineItems] = useState(() => {
+    if (editData?.line_items?.length > 0) {
+      return editData.line_items.map((li) => ({
+        item_id: li.item_id || '',
+        name: li.name || '',
+        description: li.description || '',
+        quantity: li.quantity || 1,
+        rate: li.rate || 0,
+        tax_id: li.tax_id || '',
+        tax_percentage: li.tax_percentage || 0,
+      }))
+    }
+    return [{ item_id: '', name: '', description: '', quantity: 1, rate: 0, tax_id: '', tax_percentage: 0 }]
+  })
 
-  // Use initialPONumber as default if user hasn't typed anything
-  const displayPONumber = form.purchaseOrderNumber || initialPONumber || ''
+  const [attachments, setAttachments] = useState([])
+  const fileInputRef = useRef(null)
+
+  const ALLOWED_TYPES = ['image/gif', 'image/png', 'image/jpeg', 'image/bmp', 'application/pdf',
+    'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+  const MAX_SIZE = 10 * 1024 * 1024 // 10MB
+
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files || [])
+    const valid = []
+    for (const file of files) {
+      if (file.size > MAX_SIZE) {
+        alert(`"${file.name}" exceeds 10MB limit.`)
+        continue
+      }
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        alert(`"${file.name}" is not a supported file type.`)
+        continue
+      }
+      valid.push(file)
+    }
+    setAttachments((prev) => [...prev, ...valid])
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const removeAttachment = (index) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const handleDeleteExistingAttachment = async (documentId) => {
+    if (!onDeleteAttachment) return
+    setDeletingAttachment(documentId)
+    await onDeleteAttachment(documentId)
+    setDeletingAttachment(null)
+  }
 
   const updateField = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -95,6 +155,11 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
       errors.push('Add at least one item to the purchase order.')
     }
 
+    const discountVal = parseFloat(form.discount) || 0
+    if (discountVal > 0 && !form.discountAccountId) {
+      errors.push('Please select a Discount Account.')
+    }
+
     if (errors.length > 0) {
       setValidationErrors(errors)
       return
@@ -103,14 +168,17 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
 
     const payload = {
       ...form,
-      purchaseOrderNumber: displayPONumber,
+      purchaseOrderNumber: form.purchaseOrderNumber,
       vendor_id: vendor?.Books_Contact_ID,
       line_items: validItems,
+      attachments,
       ...calculations,
     }
     console.log('[PurchaseOrderForm] Submit:', action, payload)
 
-    if (action === 'draft') {
+    if (isEditMode) {
+      onUpdate?.(payload)
+    } else if (action === 'draft') {
       onSaveDraft?.(payload)
     } else {
       onSaveAndSend?.(payload)
@@ -122,8 +190,13 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">New Purchase Order</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Create a purchase order for <span className="font-semibold text-foreground">{vendor?.Vendor_Name}</span></p>
+          <h1 className="text-xl font-bold tracking-tight">{isEditMode ? 'Edit Purchase Order' : 'New Purchase Order'}</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {isEditMode
+              ? <>Editing <span className="font-semibold text-foreground">{editData?.purchaseorder_number}</span> for <span className="font-semibold text-foreground">{vendor?.Vendor_Name}</span></>
+              : <>Create a purchase order for <span className="font-semibold text-foreground">{vendor?.Vendor_Name}</span></>
+            }
+          </p>
         </div>
         <div className="bg-primary/5 border border-primary/15 rounded-lg px-5 py-3">
           <p className="text-xs text-muted-foreground">Vendor</p>
@@ -140,8 +213,9 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
           <Input
             className="h-9 text-sm"
             placeholder="Auto-generated"
-            value={displayPONumber}
+            value={form.purchaseOrderNumber}
             onChange={(e) => updateField('purchaseOrderNumber', e.target.value)}
+            readOnly={isEditMode}
           />
         </div>
 
@@ -152,9 +226,9 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {PAYMENT_TERMS.map((term) => (
-                <SelectItem key={term} value={term}>
-                  {term}
+              {paymentTerms.map((term) => (
+                <SelectItem key={term.payment_terms_id} value={term.payment_terms_label}>
+                  {term.payment_terms_label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -189,6 +263,25 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
             onChange={(e) => updateField('deliveryDate', e.target.value)}
           />
         </div>
+
+        {isEditMode && (
+          <div className="flex items-center gap-3">
+            <Label className="w-[130px] text-sm shrink-0 text-muted-foreground">Status</Label>
+            {editData?.status === 'open' || editData?.status === 'issued' ? (
+              <span className="text-sm font-medium text-blue-600">Issued</span>
+            ) : (
+              <Select value={form.status} onValueChange={(v) => updateField('status', v)}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="open">Issued</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        )}
       </div>
 
       <Separator className="mb-5" />
@@ -277,6 +370,27 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
             </div>
           </div>
 
+          {/* Discount Account — shown when discount > 0 and at least one item added */}
+          {parseFloat(form.discount) > 0 && lineItems.some((r) => r.item_id) && (
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-destructive font-medium">Discount Account*</span>
+              <Select value={form.discountAccountId} onValueChange={(v) => updateField('discountAccountId', v)}>
+                <SelectTrigger className="h-8 w-[220px] text-sm">
+                  <SelectValue placeholder="Select an account">
+                    {discountAccounts.find((a) => a.account_id === form.discountAccountId)?.account_name || 'Select an account'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {discountAccounts.map((acc) => (
+                    <SelectItem key={acc.account_id} value={acc.account_id}>
+                      {acc.account_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           {/* Tax */}
           {calculations.totalTax > 0 && (
             <div className="flex justify-between text-sm">
@@ -303,6 +417,85 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
             <span className="text-primary">{calculations.total.toFixed(2)}</span>
           </div>
         </div>
+      </div>
+
+      {/* Attachments */}
+      <div className="mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <Paperclip className="h-4 w-4 text-muted-foreground" />
+          <Label className="text-sm font-medium">Attach File(s) to Purchase Order</Label>
+        </div>
+
+        {/* Existing attachments (from Books) */}
+        {existingAttachments.length > 0 && (
+          <div className="mb-3 space-y-2">
+            {existingAttachments.map((doc) => (
+              <div key={doc.document_id} className="flex items-center gap-2 px-3 py-2 bg-blue-50/50 border border-blue-200/50 rounded-lg text-sm">
+                <FileText className="h-4 w-4 text-blue-500 shrink-0" />
+                <span className="truncate flex-1">{doc.file_name}</span>
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {doc.file_size_formatted || ''}
+                </span>
+                {isEditMode && (
+                  <button
+                    type="button"
+                    className="text-destructive/60 hover:text-destructive transition-colors shrink-0"
+                    disabled={deletingAttachment === doc.document_id}
+                    onClick={() => handleDeleteExistingAttachment(doc.document_id)}
+                  >
+                    {deletingAttachment === doc.document_id
+                      ? <div className="h-3.5 w-3.5 border-2 border-destructive/30 border-t-destructive rounded-full animate-spin" />
+                      : <Trash2 className="h-3.5 w-3.5" />
+                    }
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Upload new files */}
+        <div className="flex items-center gap-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".gif,.png,.jpg,.jpeg,.bmp,.pdf,.xls,.xlsx,.doc,.docx"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-sm gap-1.5"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Upload File
+          </Button>
+          <span className="text-xs text-muted-foreground">Max 10MB per file. Supported: PDF, DOC, XLS, JPG, PNG</span>
+        </div>
+
+        {/* New attachments (not yet uploaded) */}
+        {attachments.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {attachments.map((file, i) => (
+              <div key={i} className="flex items-center gap-2 px-3 py-2 bg-muted/30 border rounded-lg text-sm">
+                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <span className="truncate flex-1">{file.name}</span>
+                <span className="text-xs text-muted-foreground shrink-0">{(file.size / 1024).toFixed(0)} KB</span>
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                  onClick={() => removeAttachment(i)}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <Separator className="mb-4" />
@@ -335,29 +528,51 @@ export default function PurchaseOrderForm({ vendor, items, taxes, initialPONumbe
 
       {/* Action Buttons */}
       <div className="flex items-center gap-3">
-        <Button
-          variant="outline"
-          className="text-sm px-5"
-          disabled={submitting}
-          onClick={() => handleSubmit('draft')}
-        >
-          {submitting === 'draft' ? 'Saving...' : 'Save as Draft'}
-        </Button>
-        <Button
-          className="text-sm px-5 bg-primary hover:bg-primary/90 shadow-sm"
-          disabled={submitting}
-          onClick={() => handleSubmit('send')}
-        >
-          {submitting === 'send' ? 'Saving...' : 'Save and Send'}
-        </Button>
-        <Button
-          variant="ghost"
-          className="text-sm text-muted-foreground"
-          disabled={submitting}
-          onClick={onCancel}
-        >
-          Cancel
-        </Button>
+        {isEditMode ? (
+          <>
+            <Button
+              className="text-sm px-5 bg-primary hover:bg-primary/90 shadow-sm"
+              disabled={submitting}
+              onClick={() => handleSubmit('update')}
+            >
+              {submitting ? 'Updating...' : 'Update Purchase Order'}
+            </Button>
+            <Button
+              variant="ghost"
+              className="text-sm text-muted-foreground"
+              disabled={submitting}
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              variant="outline"
+              className="text-sm px-5"
+              disabled={submitting}
+              onClick={() => handleSubmit('draft')}
+            >
+              {submitting === 'draft' ? 'Saving...' : 'Save as Draft'}
+            </Button>
+            <Button
+              className="text-sm px-5 bg-primary hover:bg-primary/90 shadow-sm"
+              disabled={submitting}
+              onClick={() => handleSubmit('send')}
+            >
+              {submitting === 'send' ? 'Saving...' : 'Save and Send'}
+            </Button>
+            <Button
+              variant="ghost"
+              className="text-sm text-muted-foreground"
+              disabled={submitting}
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+          </>
+        )}
       </div>
     </div>
   )
