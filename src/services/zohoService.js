@@ -345,6 +345,25 @@ export const convertPOToBill = async (po, billDate, billDueDate) => {
     payload.due_date = billDueDate
   }
 
+  // Carry over discount from PO
+  const discount = parseFloat(po.discount) || 0
+  if (discount > 0) {
+    payload.discount = po.is_discount_before_tax && po.discount_type === 'entity_level'
+      ? po.discount
+      : String(discount)
+    payload.is_discount_before_tax = po.is_discount_before_tax !== false
+    payload.discount_type = 'entity_level'
+    if (po.discount_account_id) {
+      payload.discount_account_id = po.discount_account_id
+    }
+  }
+
+  // Carry over adjustment from PO
+  const adjustment = parseFloat(po.adjustment) || 0
+  if (adjustment !== 0) {
+    payload.adjustment = adjustment
+  }
+
   if (po.notes) payload.notes = po.notes
   if (po.terms) payload.terms = po.terms
 

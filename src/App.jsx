@@ -240,10 +240,17 @@ function App({ pageData }) {
 
   // --- Convert to Bill ---
   const handleConvertToBill = (po) => {
-    const today = new Date().toISOString().split('T')[0]
-    setBillDate(today)
+    setBillDate(po.date || new Date().toISOString().split('T')[0])
     setBillDueDate('')
     setConvertConfirm(po)
+  }
+
+  const handleBillDateChange = (date) => {
+    setBillDate(date)
+    // Clear due date if it's now before the new bill date
+    if (billDueDate && billDueDate < date) {
+      setBillDueDate('')
+    }
   }
 
   const handleConvertConfirm = async () => {
@@ -434,8 +441,9 @@ function App({ pageData }) {
               <Label className="text-sm font-medium">Bill Date</Label>
               <DatePicker
                 value={billDate}
-                onChange={setBillDate}
+                onChange={handleBillDateChange}
                 placeholder="Select bill date"
+                disabledDays={convertConfirm?.date ? { before: new Date(convertConfirm.date + 'T00:00:00') } : undefined}
                 className="w-full h-10"
               />
             </div>

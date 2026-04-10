@@ -116,7 +116,14 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
   }
 
   const updateField = (field, value) => {
-    setForm((prev) => ({ ...prev, [field]: value }))
+    setForm((prev) => {
+      const next = { ...prev, [field]: value }
+      // If PO date changed and delivery date is now before PO date, clear it
+      if (field === 'date' && next.deliveryDate && next.deliveryDate < value) {
+        next.deliveryDate = ''
+      }
+      return next
+    })
   }
 
   const calculations = useMemo(() => {
@@ -306,7 +313,7 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
             value={form.deliveryDate}
             onChange={(v) => updateField('deliveryDate', v)}
             placeholder="Select delivery date"
-            disabledDays={isEditMode ? undefined : beforeToday}
+            disabledDays={isEditMode ? undefined : { before: startOfDay(form.date ? new Date(form.date + 'T00:00:00') : new Date()) }}
             className="h-9 text-sm w-full"
           />
         </div>
