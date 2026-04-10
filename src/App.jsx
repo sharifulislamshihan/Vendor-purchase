@@ -3,10 +3,10 @@ import {
   getVendorRecord, resizeWidget,
   fetchItems, fetchTaxes, fetchPaymentTerms, fetchDiscountAccounts, fetchNextPONumber,
   fetchVendorPurchaseOrders, fetchPurchaseOrderDetail,
-  createBooksPurchaseOrder, createCRMPurchaseOrder,
-  updateBooksPurchaseOrder, updateCRMPurchaseOrder,
-  deleteBooksPurchaseOrder, deleteCRMPurchaseOrder, findCRMPurchaseOrder,
-  uploadBooksPOAttachment, uploadCRMPOAttachment,
+  createBooksPurchaseOrder,
+  updateBooksPurchaseOrder,
+  deleteBooksPurchaseOrder,
+  uploadBooksPOAttachment,
   fetchPOAttachments, deletePOAttachment,
   convertPOToBill,
 } from './services/zohoService'
@@ -58,8 +58,6 @@ function App({ pageData }) {
   const [successInfo, setSuccessInfo] = useState(null)
   const [updateConfirm, setUpdateConfirm] = useState(null)
 
-  const crmVendorId = vendorRecordId
-
   // Load PO list for the vendor
   const loadPurchaseOrders = useCallback(async (booksContactId) => {
     if (!booksContactId || booksContactId === 'DEV_123') return
@@ -75,11 +73,9 @@ function App({ pageData }) {
   }, [])
 
   useEffect(() => {
-    console.log('[App] Mounted with pageData:', pageData)
     resizeWidget(1200, 700)
 
     if (!vendorRecordId || vendorRecordId === 'DEV_VENDOR_ID') {
-      console.log('[App] Dev mode — skipping API call')
       return
     }
 
@@ -107,7 +103,7 @@ function App({ pageData }) {
         setError('Failed to load data')
       })
       .finally(() => setLoading(false))
-  }, [pageData, loadPurchaseOrders])
+  }, [vendorRecordId, loadPurchaseOrders])
 
   // --- Create handlers ---
   const handleCreateNew = async () => {
@@ -117,19 +113,19 @@ function App({ pageData }) {
     setView('create')
   }
 
-  // Upload attachments to both Books and CRM
-  const uploadAttachments = async (booksPOId, crmPOId, files) => {
+  const handleRefreshItems = async () => {
+    const freshItems = await fetchItems()
+    setItems(freshItems)
+  }
+
+  // Upload attachments to Books PO
+  const uploadAttachments = async (booksPOId, files) => {
     if (!files?.length) return
     console.log('[App] Uploading', files.length, 'attachment(s)')
 
     for (const file of files) {
       const booksRes = await uploadBooksPOAttachment(booksPOId, file)
       console.log('[App] Books attachment result:', file.name, booksRes)
-
-      if (crmPOId) {
-        const crmRes = await uploadCRMPOAttachment(crmPOId, file)
-        console.log('[App] CRM attachment result:', file.name, crmRes)
-      }
     }
   }
 
@@ -144,26 +140,15 @@ function App({ pageData }) {
       return
     }
 
-    const crmResult = await createCRMPurchaseOrder(booksResult.purchaseorder, crmVendorId, payload, status)
-
-    // Upload attachments after PO is created in both systems
+    // Upload attachments after PO is created
     const booksPOId = booksResult.purchaseorder.purchaseorder_id
-    const crmPOId = crmResult.success ? crmResult.id : null
-    await uploadAttachments(booksPOId, crmPOId, payload.attachments)
+    await uploadAttachments(booksPOId, payload.attachments)
 
     setSubmitting(null)
-
-    if (crmResult.success) {
-      setSuccessInfo({
-        poNumber: booksResult.purchaseorder.purchaseorder_number,
-        status: status === 'draft' ? 'Draft' : 'Sent',
-      })
-    } else {
-      setSubmitResult({
-        type: 'error',
-        message: `Books PO created (${booksResult.purchaseorder.purchaseorder_number}), but CRM failed: ${crmResult.error}`,
-      })
-    }
+    setSuccessInfo({
+      poNumber: booksResult.purchaseorder.purchaseorder_number,
+      status: status === 'draft' ? 'Draft' : 'Sent',
+    })
   }
 
   // --- View handler ---
@@ -175,8 +160,7 @@ function App({ pageData }) {
     const detail = await fetchPurchaseOrderDetail(po.purchaseorder_id)
     if (detail) {
       setViewData(detail)
-      const attachments = await fetchPOAttachments(po.purchaseorder_id)
-      setExistingAttachments(attachments)
+      setExistingAttachments(detail.documents || detail.attachments || [])
     } else {
       setView('list')
     }
@@ -193,8 +177,7 @@ function App({ pageData }) {
     const detail = await fetchPurchaseOrderDetail(po.purchaseorder_id)
     if (detail) {
       setEditData(detail)
-      const attachments = await fetchPOAttachments(po.purchaseorder_id)
-      setExistingAttachments(attachments)
+      setExistingAttachments(detail.documents || detail.attachments || [])
     } else {
       setSubmitResult({ type: 'error', message: 'Failed to load purchase order details' })
       setView('list')
@@ -230,14 +213,8 @@ function App({ pageData }) {
       return
     }
 
-    // Find and update CRM record
-    const crmPO = await findCRMPurchaseOrder(editData.purchaseorder_id)
-    if (crmPO) {
-      await updateCRMPurchaseOrder(crmPO.id, booksResult.purchaseorder, payload)
-    }
-
     // Upload any new attachments
-    await uploadAttachments(editData.purchaseorder_id, crmPO?.id, payload.attachments)
+    await uploadAttachments(editData.purchaseorder_id, payload.attachments)
 
     setSubmitting(null)
     setSuccessInfo({
@@ -250,7 +227,6 @@ function App({ pageData }) {
   const handleDelete = async (booksPOId) => {
     setDeleting(booksPOId)
 
-    // Delete from Books
     const booksResult = await deleteBooksPurchaseOrder(booksPOId)
     if (!booksResult.success) {
       setDeleting(null)
@@ -258,14 +234,7 @@ function App({ pageData }) {
       return
     }
 
-    // Find and delete from CRM
-    const crmPO = await findCRMPurchaseOrder(booksPOId)
-    if (crmPO) {
-      await deleteCRMPurchaseOrder(crmPO.id)
-    }
-
     setDeleting(null)
-    // Refresh list
     loadPurchaseOrders(vendor?.Books_Contact_ID)
   }
 
@@ -352,6 +321,7 @@ function App({ pageData }) {
           purchaseOrders={purchaseOrders}
           loading={listLoading}
           onCreateNew={handleCreateNew}
+          onRefreshItems={handleRefreshItems}
           onView={handleView}
           onEdit={handleEdit}
           onDelete={handleDelete}
@@ -385,6 +355,7 @@ function App({ pageData }) {
           defaultPaymentTerm={paymentTerms[0]?.payment_terms_label || ''}
           discountAccounts={discountAccounts}
           initialPONumber={poNumber}
+
           onSaveDraft={(payload) => savePO(payload, 'draft')}
           onSaveAndSend={(payload) => savePO(payload, 'open')}
           onCancel={handleCancel}
@@ -413,6 +384,7 @@ function App({ pageData }) {
           editData={editData}
           existingAttachments={existingAttachments}
           onDeleteAttachment={(documentId) => handleDeleteAttachment(editData.purchaseorder_id, documentId)}
+
           onUpdate={handleUpdateRequest}
           onCancel={handleCancel}
           submitting={submitting}
@@ -430,7 +402,7 @@ function App({ pageData }) {
             </div>
             <DialogTitle className="text-center">Confirm Update</DialogTitle>
             <DialogDescription className="text-center">
-              Are you sure you want to update <span className="font-semibold text-foreground">{editData?.purchaseorder_number}</span>? This will update the purchase order in both Zoho Books and CRM.
+              Are you sure you want to update <span className="font-semibold text-foreground">{editData?.purchaseorder_number}</span>? This will update the purchase order in Zoho Books.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:justify-center">
@@ -518,10 +490,10 @@ function App({ pageData }) {
                 ? <><span className="font-semibold text-foreground">{successInfo?.poNumber}</span> has been converted to Bill <span className="font-semibold text-foreground">{successInfo?.billNumber}</span> in Zoho Books.</>
                 : <><span className="font-semibold text-foreground">{successInfo?.poNumber}</span> has been successfully
                   {successInfo?.status === 'Updated'
-                    ? ' updated in Zoho Books and CRM.'
+                    ? ' updated in Zoho Books.'
                     : successInfo?.status === 'Draft'
-                      ? ' created in Zoho Books and CRM as a draft.'
-                      : ' created in Zoho Books and CRM and sent to the vendor.'
+                      ? ' saved as a draft in Zoho Books.'
+                      : ' created and sent to the vendor.'
                   }</>
               }
             </DialogDescription>

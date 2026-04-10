@@ -12,12 +12,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { DatePicker } from '@/components/ui/date-picker'
+import { startOfDay } from 'date-fns'
 import ItemTable from './ItemTable'
 
 const todayStr = () => {
   const d = new Date()
   return d.toISOString().split('T')[0]
 }
+
+const beforeToday = { before: startOfDay(new Date()) }
 
 export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms = [], defaultPaymentTerm = '', discountAccounts = [], initialPONumber, editData, existingAttachments = [], onDeleteAttachment, onSaveDraft, onSaveAndSend, onUpdate, onCancel, submitting, submitResult, onDismissResult }) {
   const isEditMode = !!editData
@@ -36,6 +40,7 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
         discount: parseFloat(editData.discount) || 0,
         discountType: editData.discount_type === 'entity_level' ? (String(editData.discount).endsWith('%') ? 'percent' : 'flat') : 'percent',
         discountAccountId: editData.discount_account_id || '',
+        isDiscountBeforeTax: editData.is_discount_before_tax !== false,
         adjustment: parseFloat(editData.adjustment) || 0,
         status: editData.status || 'draft',
       }
@@ -51,6 +56,7 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
       discount: 0,
       discountType: 'percent',
       discountAccountId: '',
+      isDiscountBeforeTax: true,
       adjustment: 0,
       status: 'draft',
     }
@@ -65,10 +71,11 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
         quantity: li.quantity || 1,
         rate: li.rate || 0,
         tax_id: li.tax_id || '',
+        tax_name: li.tax_name || '',
         tax_percentage: li.tax_percentage || 0,
       }))
     }
-    return [{ item_id: '', name: '', description: '', quantity: 1, rate: 0, tax_id: '', tax_percentage: 0 }]
+    return [{ item_id: '', name: '', description: '', quantity: 1, rate: 0, tax_id: '', tax_name: '', tax_percentage: 0 }]
   })
 
   const [attachments, setAttachments] = useState([])
@@ -114,31 +121,69 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
 
   const calculations = useMemo(() => {
     let subTotal = 0
-    let totalTax = 0
     let totalQuantity = 0
 
+    const itemDetails = []
     lineItems.forEach((row) => {
       const qty = parseFloat(row.quantity) || 0
       const rate = parseFloat(row.rate) || 0
       const amount = qty * rate
-      const tax = amount * ((parseFloat(row.tax_percentage) || 0) / 100)
       subTotal += amount
-      totalTax += tax
       totalQuantity += qty
+      itemDetails.push({
+        amount,
+        taxPct: parseFloat(row.tax_percentage) || 0,
+        taxName: row.tax_name || '',
+      })
     })
 
-    let discountAmount = 0
-    if (form.discountType === 'percent') {
-      discountAmount = subTotal * ((parseFloat(form.discount) || 0) / 100)
-    } else {
-      discountAmount = parseFloat(form.discount) || 0
+    // Build per-tax-type breakdown
+    const taxMap = {}
+    const addTax = (taxName, taxPct, taxAmt) => {
+      const key = `${taxName}__${taxPct}`
+      if (taxMap[key]) {
+        taxMap[key].amount += taxAmt
+      } else {
+        taxMap[key] = { taxName: taxName || `Tax ${taxPct}%`, taxPct, amount: taxAmt }
+      }
     }
 
+    const discountInput = parseFloat(form.discount) || 0
+    let discountAmount = 0
+    let totalTax = 0
+
+    if (form.isDiscountBeforeTax) {
+      // DISCOUNT BEFORE TAX: discount on subtotal, then tax on discounted amounts
+      discountAmount = form.discountType === 'percent'
+        ? subTotal * (discountInput / 100)
+        : discountInput
+
+      itemDetails.forEach(({ amount, taxPct, taxName }) => {
+        if (taxPct <= 0) return
+        const itemDiscount = subTotal > 0 ? discountAmount * (amount / subTotal) : 0
+        addTax(taxName, taxPct, (amount - itemDiscount) * (taxPct / 100))
+      })
+    } else {
+      // TAX BEFORE DISCOUNT: tax on full amounts first
+      itemDetails.forEach(({ amount, taxPct, taxName }) => {
+        if (taxPct <= 0) return
+        addTax(taxName, taxPct, amount * (taxPct / 100))
+      })
+
+      // For percentage: discount on (subtotal + tax); for flat: just the flat amount
+      const taxTotal = Object.values(taxMap).reduce((s, t) => s + t.amount, 0)
+      discountAmount = form.discountType === 'percent'
+        ? (subTotal + taxTotal) * (discountInput / 100)
+        : discountInput
+    }
+
+    const taxBreakdown = Object.values(taxMap)
+    totalTax = taxBreakdown.reduce((s, t) => s + t.amount, 0)
     const adjustment = parseFloat(form.adjustment) || 0
     const total = subTotal + totalTax - discountAmount + adjustment
 
-    return { subTotal, totalTax, totalQuantity, discountAmount, adjustment, total }
-  }, [lineItems, form.discount, form.discountType, form.adjustment])
+    return { subTotal, totalTax, totalQuantity, discountAmount, adjustment, total, taxBreakdown }
+  }, [lineItems, form.discount, form.discountType, form.adjustment, form.isDiscountBeforeTax])
 
   const [validationErrors, setValidationErrors] = useState([])
 
@@ -246,21 +291,23 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
 
         <div className="flex items-center gap-3">
           <Label className="w-[130px] text-sm shrink-0 text-muted-foreground">Date</Label>
-          <Input
-            type="date"
-            className="h-9 text-sm"
+          <DatePicker
             value={form.date}
-            onChange={(e) => updateField('date', e.target.value)}
+            onChange={(v) => updateField('date', v)}
+            placeholder="Select date"
+            disabledDays={isEditMode ? undefined : beforeToday}
+            className="h-9 text-sm w-full"
           />
         </div>
 
         <div className="flex items-center gap-3">
           <Label className="w-[130px] text-sm shrink-0 text-muted-foreground">Delivery Date</Label>
-          <Input
-            type="date"
-            className="h-9 text-sm"
+          <DatePicker
             value={form.deliveryDate}
-            onChange={(e) => updateField('deliveryDate', e.target.value)}
+            onChange={(v) => updateField('deliveryDate', v)}
+            placeholder="Select delivery date"
+            disabledDays={isEditMode ? undefined : beforeToday}
+            className="h-9 text-sm w-full"
           />
         </div>
 
@@ -331,9 +378,32 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
             Total Quantity: {calculations.totalQuantity}
           </div>
 
+          {/* --- BEFORE DISCOUNT mode: Tax then Discount --- */}
+          {!form.isDiscountBeforeTax && calculations.taxBreakdown.length > 0 && (
+            <div className="border rounded-md px-3 py-2.5 space-y-1.5 bg-background">
+              {calculations.taxBreakdown.map((t, i) => (
+                <div key={i} className="flex justify-between text-sm">
+                  <span className="text-blue-600">{t.taxName} [{t.taxPct}%]</span>
+                  <span>{t.amount.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Discount */}
           <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Discount</span>
+            <div>
+              <span className="text-muted-foreground">Discount</span>
+              {parseFloat(form.discount) > 0 && (
+                <button
+                  type="button"
+                  className="block text-xs text-blue-500 hover:text-blue-700 hover:underline transition-colors mt-0.5"
+                  onClick={() => updateField('isDiscountBeforeTax', !form.isDiscountBeforeTax)}
+                >
+                  {form.isDiscountBeforeTax ? 'Apply after tax' : 'Apply before tax'}
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-1.5">
               <Input
                 type="number"
@@ -391,11 +461,15 @@ export default function PurchaseOrderForm({ vendor, items, taxes, paymentTerms =
             </div>
           )}
 
-          {/* Tax */}
-          {calculations.totalTax > 0 && (
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Tax</span>
-              <span>+{calculations.totalTax.toFixed(2)}</span>
+          {/* --- AFTER DISCOUNT mode: Discount then Tax --- */}
+          {form.isDiscountBeforeTax && calculations.taxBreakdown.length > 0 && (
+            <div className="border rounded-md px-3 py-2.5 space-y-1.5 bg-background">
+              {calculations.taxBreakdown.map((t, i) => (
+                <div key={i} className="flex justify-between text-sm">
+                  <span className="text-blue-600">{t.taxName} [{t.taxPct}%]</span>
+                  <span>{t.amount.toFixed(2)}</span>
+                </div>
+              ))}
             </div>
           )}
 

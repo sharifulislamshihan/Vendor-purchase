@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Eye, Pencil, Trash2, AlertTriangle, FileCheck, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Eye, Pencil, Trash2, AlertTriangle, FileCheck, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -36,8 +36,9 @@ const STATUS_LABELS = {
 
 const PAGE_SIZES = [5, 10, 20, 50, 100]
 
-export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onCreateNew, onView, onEdit, onDelete, onConvertToBill, deleting, converting }) {
+export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onCreateNew, onRefreshItems, onView, onEdit, onDelete, onConvertToBill, deleting, converting }) {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
 
@@ -54,7 +55,7 @@ export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onC
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '-'
-    const d = new Date(dateStr)
+    const d = new Date(dateStr + 'T00:00:00')
     return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
   }
 
@@ -79,9 +80,25 @@ export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onC
             {vendor?.Vendor_Name} — {purchaseOrders.length} purchase order{purchaseOrders.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <Button onClick={onCreateNew} className="text-sm px-5 shadow-sm">
-          + New Purchase Order
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 w-9 p-0 text-muted-foreground hover:text-primary"
+            disabled={refreshing}
+            onClick={async () => {
+              setRefreshing(true)
+              await onRefreshItems?.()
+              setRefreshing(false)
+            }}
+            title="Refresh items from Books"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </Button>
+          <Button onClick={onCreateNew} className="text-sm px-5 shadow-sm">
+            + New Purchase Order
+          </Button>
+        </div>
       </div>
 
       <Separator className="mb-4" />
@@ -144,7 +161,6 @@ export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onC
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                        <>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -154,28 +170,32 @@ export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onC
                           >
                             <Eye className="h-3.5 w-3.5" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
-                            onClick={() => onEdit(po)}
-                            title="Edit"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                            onClick={() => handleDeleteClick(po)}
-                            disabled={deleting === po.purchaseorder_id}
-                            title="Delete"
-                          >
-                            {deleting === po.purchaseorder_id
-                              ? <div className="h-3.5 w-3.5 border-2 border-destructive/30 border-t-destructive rounded-full animate-spin" />
-                              : <Trash2 className="h-3.5 w-3.5" />
-                            }
-                          </Button>
+                          {po.status !== 'billed' && po.status !== 'cancelled' && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
+                                onClick={() => onEdit(po)}
+                                title="Edit"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => handleDeleteClick(po)}
+                                disabled={deleting === po.purchaseorder_id}
+                                title="Delete"
+                              >
+                                {deleting === po.purchaseorder_id
+                                  ? <div className="h-3.5 w-3.5 border-2 border-destructive/30 border-t-destructive rounded-full animate-spin" />
+                                  : <Trash2 className="h-3.5 w-3.5" />
+                                }
+                              </Button>
+                            </>
+                          )}
                           {(po.status === 'open' || po.status === 'issued') && (
                             <Button
                               variant="ghost"
@@ -191,7 +211,6 @@ export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onC
                               }
                             </Button>
                           )}
-                        </>
                     </div>
                   </td>
                 </tr>
@@ -287,7 +306,7 @@ export default function PurchaseOrderList({ vendor, purchaseOrders, loading, onC
             </div>
             <DialogTitle className="text-center">Delete Purchase Order</DialogTitle>
             <DialogDescription className="text-center">
-              Are you sure you want to delete <span className="font-semibold text-foreground">{deleteConfirm?.purchaseorder_number}</span>? This will remove it from both Zoho Books and CRM. This action cannot be undone.
+              Are you sure you want to delete <span className="font-semibold text-foreground">{deleteConfirm?.purchaseorder_number}</span>? This will remove it from Zoho Books. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:justify-center">

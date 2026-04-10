@@ -22,6 +22,7 @@ export const getVendorRecord = async (vendorId) => {
 const BOOKS_ORG_ID = '771340721'
 const CONNECTION_NAME = 'zoho_book_conn_test'
 
+
 // Helper to call Zoho Books API via CRM Connection
 const callBooksAPI = async (url, method = 'GET', body = null) => {
   const ZOHO = getZOHO()
@@ -36,11 +37,11 @@ const callBooksAPI = async (url, method = 'GET', body = null) => {
     url: fullUrl,
     method,
     param_type: 1,
+    parameters: {},
   }
   if (body) {
-    // Send JSONString as a URL parameter instead of body
-    params.url = fullUrl + '&JSONString=' + encodeURIComponent(JSON.stringify(body))
-    console.log('[zohoService] Request URL with JSONString:', params.url)
+    params.parameters = { JSONString: JSON.stringify(body) }
+    console.log('[zohoService] Request payload:', params.parameters)
   }
 
   console.log('[zohoService] Books API call:', method, url)
@@ -92,7 +93,9 @@ export const fetchItems = async () => {
   const data = await callBooksAPI('/items')
   console.log('[zohoService] Items data:', data)
   const allItems = data?.items || []
-  const purchaseItems = allItems.filter(item => item.item_type === 'purchases')
+  const purchaseItems = allItems.filter(item =>
+    item.item_type === 'purchases' || item.item_type === 'sales_and_purchases' || item.item_type === 'inventory'
+  )
   console.log('[zohoService] Purchase items:', purchaseItems.length, '/', allItems.length)
   return purchaseItems
 }
@@ -134,6 +137,7 @@ export const createBooksPurchaseOrder = async (formData, status = 'draft') => {
   const lineItems = formData.line_items.map((item) => {
     const lineItem = {
       item_id: item.item_id,
+      name: item.name || '',
       quantity: parseFloat(item.quantity) || 1,
       rate: parseFloat(item.rate) || 0,
       description: item.description || '',
@@ -172,7 +176,7 @@ export const createBooksPurchaseOrder = async (formData, status = 'draft') => {
     } else {
       payload.discount = discountVal.toFixed(2)
     }
-    payload.is_discount_before_tax = true
+    payload.is_discount_before_tax = formData.isDiscountBeforeTax !== false
     payload.discount_type = 'entity_level'
     if (formData.discountAccountId) {
       payload.discount_account_id = formData.discountAccountId
@@ -208,129 +212,6 @@ export const createBooksPurchaseOrder = async (formData, status = 'draft') => {
   return { success: false, error: data?.message || 'Failed to create purchase order' }
 }
 
-// Build CRM Product_Details from Books PO line items
-const buildCRMProductDetails = async (booksPOLineItems) => {
-  const ZOHO = getZOHO()
-  if (!ZOHO || !booksPOLineItems?.length) return []
-
-  const productDetails = []
-
-  for (const line of booksPOLineItems) {
-    console.log('[zohoService] Books line item:', JSON.stringify(line))
-
-    let crmProductId = null
-    try {
-      const searchRes = await ZOHO.CRM.API.searchRecord({
-        Entity: 'Products',
-        Type: 'criteria',
-        Query: `(ZB_item_id:equals:${line.item_id})`,
-      })
-      if (searchRes?.data?.[0]) {
-        crmProductId = searchRes.data[0].id
-      }
-    } catch (err) {
-      console.warn('[zohoService] Product search failed for item:', line.item_id, err)
-    }
-
-    if (crmProductId) {
-      const lineDetail = {
-        product: { id: crmProductId },
-        quantity: line.quantity,
-        list_price: line.rate,
-      }
-
-      // Tax — try line_tax format for CRM
-      const taxPct = parseFloat(line.tax_percentage) || 0
-      if (line.tax_name && taxPct > 0) {
-        lineDetail.line_tax = [
-          {
-            name: line.tax_name,
-            percentage: taxPct,
-          },
-        ]
-        console.log('[zohoService] Line tax set:', line.tax_name, taxPct + '%')
-      }
-
-      productDetails.push(lineDetail)
-    }
-  }
-
-  return productDetails
-}
-
-// Build CRM discount from Books PO response
-const getCRMDiscount = (booksPO) => {
-  // Log all discount-related fields from Books to find the right one
-  console.log('[zohoService] Books discount fields:', {
-    discount: booksPO.discount,
-    discount_amount: booksPO.discount_amount,
-    discount_total: booksPO.discount_total,
-    discount_type: booksPO.discount_type,
-    is_discount_before_tax: booksPO.is_discount_before_tax,
-  })
-
-  // Try discount_amount first (calculated amount), then discount_total, then discount
-  const amount = parseFloat(booksPO.discount_amount)
-    || parseFloat(booksPO.discount_total)
-    || parseFloat(booksPO.discount)
-    || 0
-  return amount
-}
-
-// Create Purchase Order in CRM and link to Vendor
-export const createCRMPurchaseOrder = async (booksPO, crmVendorId, formData, status) => {
-  const ZOHO = getZOHO()
-  if (!ZOHO) {
-    console.warn('[zohoService] ZOHO SDK not available')
-    return { success: false, error: 'ZOHO SDK not available' }
-  }
-
-  console.log('[zohoService] Creating PO in CRM for vendor:', crmVendorId)
-  console.log('[zohoService] Books PO full response:', JSON.stringify(booksPO, null, 2))
-
-  const crmRecord = {
-    Subject: booksPO.purchaseorder_number,
-    PO_Number: booksPO.purchaseorder_number.replace(/^\D+/, ''),
-    PO_Date: formData.date,
-    Due_Date: formData.deliveryDate || null,
-    Vendor_Name: { id: crmVendorId },
-    Status: status === 'draft' ? 'Draft' : 'Issued',
-    Zoho_Books_PO_ID: booksPO.purchaseorder_id,
-    Adjustment: parseFloat(booksPO.adjustment) || 0,
-    Discount: getCRMDiscount(booksPO),
-  }
-
-  // Build line items with tax
-  const productDetails = await buildCRMProductDetails(booksPO.line_items)
-  if (productDetails.length > 0) {
-    crmRecord.Product_Details = productDetails
-  }
-
-  console.log('[zohoService] CRM PO record:', JSON.stringify(crmRecord, null, 2))
-
-  try {
-    const response = await ZOHO.CRM.API.insertRecord({
-      Entity: 'Purchase_Orders',
-      APIData: crmRecord,
-      Trigger: ['workflow'],
-    })
-    console.log('[zohoService] CRM PO response:', response)
-
-    if (response?.data?.[0]?.code === 'SUCCESS') {
-      const crmPOId = response.data[0].details.id
-      console.log('[zohoService] CRM PO created:', crmPOId)
-      return { success: true, id: crmPOId }
-    }
-
-    const errMsg = response?.data?.[0]?.message || 'Failed to create CRM PO'
-    console.error('[zohoService] CRM PO failed:', errMsg)
-    return { success: false, error: errMsg }
-  } catch (err) {
-    console.error('[zohoService] CRM PO creation error:', err)
-    return { success: false, error: err.message || 'CRM API error' }
-  }
-}
-
 // Fetch all purchase orders for a vendor from Zoho Books
 export const fetchVendorPurchaseOrders = async (booksContactId) => {
   console.log('[zohoService] Fetching POs for vendor:', booksContactId)
@@ -354,6 +235,7 @@ export const updateBooksPurchaseOrder = async (poId, formData) => {
   const lineItems = formData.line_items.map((item) => {
     const lineItem = {
       item_id: item.item_id,
+      name: item.name || '',
       quantity: parseFloat(item.quantity) || 1,
       rate: parseFloat(item.rate) || 0,
       description: item.description || '',
@@ -372,12 +254,9 @@ export const updateBooksPurchaseOrder = async (poId, formData) => {
     terms: formData.terms || '',
   }
 
-  if (formData.reference) {
-    payload.reference_number = formData.reference
-  }
-  if (formData.deliveryDate) {
-    payload.delivery_date = formData.deliveryDate
-  }
+  // Always send these so clearing them in edit actually removes the value in Books
+  payload.reference_number = formData.reference || ''
+  payload.delivery_date = formData.deliveryDate || ''
 
   // Discount
   const discountVal = parseFloat(formData.discount) || 0
@@ -387,7 +266,7 @@ export const updateBooksPurchaseOrder = async (poId, formData) => {
     } else {
       payload.discount = discountVal.toFixed(2)
     }
-    payload.is_discount_before_tax = true
+    payload.is_discount_before_tax = formData.isDiscountBeforeTax !== false
     payload.discount_type = 'entity_level'
     if (formData.discountAccountId) {
       payload.discount_account_id = formData.discountAccountId
@@ -396,11 +275,8 @@ export const updateBooksPurchaseOrder = async (poId, formData) => {
     payload.discount = '0'
   }
 
-  // Adjustment
-  const adjustmentVal = parseFloat(formData.adjustment) || 0
-  if (adjustmentVal !== 0) {
-    payload.adjustment = adjustmentVal
-  }
+  // Adjustment (always send so it can be reset to 0)
+  payload.adjustment = parseFloat(formData.adjustment) || 0
 
   console.log('[zohoService] Books PO update payload:', JSON.stringify(payload, null, 2))
 
@@ -425,59 +301,13 @@ export const updateBooksPurchaseOrder = async (poId, formData) => {
   return { success: false, error: data?.message || 'Failed to update purchase order' }
 }
 
-// Update Purchase Order in CRM (full update including line items, tax, discount)
-export const updateCRMPurchaseOrder = async (crmPoId, booksPO, formData) => {
-  const ZOHO = getZOHO()
-  if (!ZOHO) return { success: false, error: 'ZOHO SDK not available' }
-
-  console.log('[zohoService] Updating CRM PO:', crmPoId)
-
-  console.log('[zohoService] Books PO for CRM update:', JSON.stringify(booksPO, null, 2))
-
-  const statusMap = { draft: 'Draft', open: 'Issued', billed: 'Delivered', closed: 'Delivered' }
-  const crmRecord = {
-    Subject: booksPO.purchaseorder_number,
-    PO_Date: formData.date,
-    Due_Date: formData.deliveryDate || null,
-    Adjustment: parseFloat(booksPO.adjustment) || 0,
-    Discount: getCRMDiscount(booksPO),
-    Status: statusMap[booksPO.status] || statusMap[formData.status] || 'Draft',
-  }
-
-  // Rebuild line items with tax
-  const productDetails = await buildCRMProductDetails(booksPO.line_items)
-  if (productDetails.length > 0) {
-    crmRecord.Product_Details = productDetails
-  }
-
-  console.log('[zohoService] CRM PO update record:', JSON.stringify(crmRecord, null, 2))
-
-  try {
-    const response = await ZOHO.CRM.API.updateRecord({
-      Entity: 'Purchase_Orders',
-      RecordID: crmPoId,
-      APIData: crmRecord,
-      Trigger: ['workflow'],
-    })
-    console.log('[zohoService] CRM PO update response:', response)
-
-    if (response?.data?.[0]?.code === 'SUCCESS') {
-      return { success: true }
-    }
-    return { success: false, error: response?.data?.[0]?.message || 'CRM update failed' }
-  } catch (err) {
-    console.error('[zohoService] CRM PO update error:', err)
-    return { success: false, error: err.message || 'CRM API error' }
-  }
-}
-
 // Convert Purchase Order to Bill in Zoho Books (native conversion)
 export const convertPOToBill = async (po, billDate, billDueDate) => {
   console.log('[zohoService] Converting PO to Bill:', po.purchaseorder_id)
   console.log('[zohoService] Full PO for conversion:', JSON.stringify(po, null, 2))
 
-  // Fetch next bill number
-  const billList = await callBooksAPI('/bills?sort_column=created_time&sort_order=D')
+  // Fetch next bill number (auto-numbering may be off in Books)
+  const billList = await callBooksAPI('/bills?sort_column=created_time&sort_order=D&per_page=1')
   let billNumber = 'BILL-00001'
   if (billList?.bills?.length > 0) {
     const lastBill = billList.bills[0].bill_number
@@ -525,26 +355,6 @@ export const convertPOToBill = async (po, billDate, billDueDate) => {
 
   if (data?.code === 0 && data?.bill) {
     console.log('[zohoService] Bill created:', data.bill.bill_id, '— PO should now be billed')
-
-    // Update CRM PO status to Delivered (billed)
-    const ZOHO = getZOHO()
-    if (ZOHO) {
-      const crmPO = await findCRMPurchaseOrder(po.purchaseorder_id)
-      if (crmPO) {
-        try {
-          await ZOHO.CRM.API.updateRecord({
-            Entity: 'Purchase_Orders',
-            RecordID: crmPO.id,
-            APIData: { Status: 'Delivered' },
-            Trigger: ['workflow'],
-          })
-          console.log('[zohoService] CRM PO marked as Delivered')
-        } catch (err) {
-          console.warn('[zohoService] CRM status update failed:', err)
-        }
-      }
-    }
-
     return { success: true, bill: data.bill }
   }
 
@@ -561,47 +371,6 @@ export const deleteBooksPurchaseOrder = async (poId) => {
     return { success: true }
   }
   return { success: false, error: data?.message || 'Failed to delete purchase order' }
-}
-
-// Delete Purchase Order from CRM
-export const deleteCRMPurchaseOrder = async (crmPoId) => {
-  const ZOHO = getZOHO()
-  if (!ZOHO) return { success: false, error: 'ZOHO SDK not available' }
-
-  console.log('[zohoService] Deleting CRM PO:', crmPoId)
-  try {
-    const response = await ZOHO.CRM.API.deleteRecord({
-      Entity: 'Purchase_Orders',
-      RecordID: crmPoId,
-    })
-    console.log('[zohoService] CRM delete response:', response)
-
-    if (response?.data?.[0]?.code === 'SUCCESS') {
-      return { success: true }
-    }
-    return { success: false, error: response?.data?.[0]?.message || 'CRM delete failed' }
-  } catch (err) {
-    console.error('[zohoService] CRM PO delete error:', err)
-    return { success: false, error: err.message || 'CRM API error' }
-  }
-}
-
-// Find CRM Purchase Order by Zoho Books PO ID
-export const findCRMPurchaseOrder = async (booksPOId) => {
-  const ZOHO = getZOHO()
-  if (!ZOHO) return null
-
-  try {
-    const searchRes = await ZOHO.CRM.API.searchRecord({
-      Entity: 'Purchase_Orders',
-      Type: 'criteria',
-      Query: `(Zoho_Books_PO_ID:equals:${booksPOId})`,
-    })
-    return searchRes?.data?.[0] || null
-  } catch (err) {
-    console.warn('[zohoService] CRM PO search failed:', err)
-    return null
-  }
 }
 
 // Convert a File to base64 string
@@ -643,31 +412,6 @@ export const uploadBooksPOAttachment = async (poId, file) => {
   } catch (err) {
     console.error('[zohoService] Books attachment error:', err)
     return { success: false, error: err.message || 'Attachment upload failed' }
-  }
-}
-
-// Upload attachment to Purchase Order in Zoho CRM
-export const uploadCRMPOAttachment = async (crmPoId, file) => {
-  const ZOHO = getZOHO()
-  if (!ZOHO) return { success: false, error: 'ZOHO SDK not available' }
-
-  console.log('[zohoService] Uploading attachment to CRM PO:', crmPoId, file.name)
-
-  try {
-    const response = await ZOHO.CRM.API.attachFile({
-      Entity: 'Purchase_Orders',
-      RecordID: crmPoId,
-      File: { Name: file.name, Content: file },
-    })
-    console.log('[zohoService] CRM attachment response:', response)
-
-    if (response?.data?.[0]?.code === 'SUCCESS') {
-      return { success: true }
-    }
-    return { success: false, error: response?.data?.[0]?.message || 'CRM attachment failed' }
-  } catch (err) {
-    console.error('[zohoService] CRM attachment error:', err)
-    return { success: false, error: err.message || 'CRM attachment failed' }
   }
 }
 

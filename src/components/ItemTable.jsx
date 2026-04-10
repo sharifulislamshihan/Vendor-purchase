@@ -26,14 +26,16 @@ function ItemRow({ row, index, items, taxes, onUpdate, onRemove }) {
   const [open, setOpen] = useState(false)
 
   const handleItemSelect = (item) => {
+    const itemTax = item.tax_id ? taxes.find((t) => t.tax_id === item.tax_id) : null
     onUpdate(index, {
       item_id: item.item_id,
       name: item.name,
       description: item.purchase_description || '',
       rate: item.purchase_rate || 0,
       quantity: row.quantity || 1,
-      tax_id: '',
-      tax_percentage: 0,
+      tax_id: item.tax_id || '',
+      tax_name: itemTax?.tax_name || item.tax_name || '',
+      tax_percentage: item.tax_percentage || 0,
     })
     setOpen(false)
   }
@@ -43,16 +45,20 @@ function ItemRow({ row, index, items, taxes, onUpdate, onRemove }) {
   }
 
   const handleTaxChange = (taxId) => {
+    if (taxId === '__none__') {
+      onUpdate(index, { ...row, tax_id: '', tax_name: '', tax_percentage: 0 })
+      return
+    }
     const tax = taxes.find((t) => t.tax_id === taxId)
     onUpdate(index, {
       ...row,
       tax_id: taxId,
+      tax_name: tax ? tax.tax_name : '',
       tax_percentage: tax ? tax.tax_percentage : 0,
     })
   }
 
   const amount = (parseFloat(row.quantity) || 0) * (parseFloat(row.rate) || 0)
-  const taxAmount = amount * ((parseFloat(row.tax_percentage) || 0) / 100)
 
   return (
     <tr className="border-b last:border-b-0 hover:bg-muted/20 transition-colors">
@@ -139,6 +145,7 @@ function ItemRow({ row, index, items, taxes, onUpdate, onRemove }) {
             }
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
             {taxes.map((tax) => (
               <SelectItem key={tax.tax_id} value={tax.tax_id}>
                 {tax.tax_name} ({tax.tax_percentage}%)
@@ -150,7 +157,7 @@ function ItemRow({ row, index, items, taxes, onUpdate, onRemove }) {
 
       {/* Amount */}
       <td className="p-2.5 w-[110px] text-right text-sm font-semibold tabular-nums">
-        {(amount + taxAmount).toFixed(2)}
+        {amount.toFixed(2)}
       </td>
 
       {/* Remove */}
@@ -175,6 +182,7 @@ const emptyRow = {
   quantity: 1,
   rate: 0,
   tax_id: '',
+  tax_name: '',
   tax_percentage: 0,
 }
 

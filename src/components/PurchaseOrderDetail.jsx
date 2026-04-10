@@ -26,7 +26,7 @@ export default function PurchaseOrderDetail({ po, attachments = [], onBack, onEd
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '-'
-    const d = new Date(dateStr)
+    const d = new Date(dateStr + 'T00:00:00')
     return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
   }
 
@@ -58,14 +58,18 @@ export default function PurchaseOrderDetail({ po, attachments = [], onBack, onEd
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="text-sm" onClick={() => onEdit(po)}>
-            <Pencil className="h-3.5 w-3.5 mr-1.5" />
-            Edit
-          </Button>
-          <Button variant="outline" size="sm" className="text-sm text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30" onClick={() => onDelete(po)}>
-            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-            Delete
-          </Button>
+          {po.status !== 'billed' && po.status !== 'cancelled' && (
+            <>
+              <Button variant="outline" size="sm" className="text-sm" onClick={() => onEdit(po)}>
+                <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                Edit
+              </Button>
+              <Button variant="outline" size="sm" className="text-sm text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30" onClick={() => onDelete(po)}>
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                Delete
+              </Button>
+            </>
+          )}
           {(po.status === 'open' || po.status === 'issued') && (
             <Button variant="outline" size="sm" className="text-sm text-green-600 hover:text-green-700 hover:bg-green-50 border-green-300" onClick={() => onConvertToBill(po)}>
               <FileCheck className="h-3.5 w-3.5 mr-1.5" />
